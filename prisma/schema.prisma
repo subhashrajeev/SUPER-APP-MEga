@@ -1,0 +1,1990 @@
+// IVR INTERIORS Super App - Complete Database Schema
+// Covers all 27 modules with relationships and indexes
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================================
+// MODULE 1 & 25: AUTHENTICATION & ADMINISTRATION - USERS, ROLES, PERMISSIONS
+// ============================================================================
+
+enum UserRole {
+  SUPERADMIN
+  ADMIN
+  PROJECT_MANAGER
+  TECHNICIAN
+  SALES
+  CLIENT
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  emailVerified DateTime?
+  password      String
+  name          String
+  phone         String?
+  avatar        String?
+  role          UserRole     @default(SALES)
+  status        UserStatus   @default(ACTIVE)
+  metadata      Json?
+
+  // Relationships
+  leads         Lead[]       @relation("LeadOwner")
+  assignedLeads LeadAssignment[]
+  quotations    Quotation[]
+  projects      Project[]    @relation("ProjectManager")
+  appointments  Appointment[]
+  serviceTickets ServiceTicket[]
+  employees     Employee[]
+  createdInvoices Invoice[]
+  activityLogs  ActivityLog[]
+  notifications Notification[]
+  dashboardWidgets DashboardWidget[]
+  routes        Route[]
+  campaigns     MarketingCampaign[]
+  clientPortalAccess ClientPortalAccess[]
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  lastLoginAt   DateTime?
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  module      String
+  action      String
+
+  roles       RolePermission[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([module])
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  role         UserRole
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime   @default(now())
+
+  @@unique([role, permissionId])
+  @@index([role])
+}
+
+// ============================================================================
+// MODULE 2: LEADS CRM - LEAD MANAGEMENT & PIPELINE
+// ============================================================================
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL_SENT
+  NEGOTIATION
+  WON
+  LOST
+  ON_HOLD
+}
+
+enum LeadSource {
+  WEBSITE
+  REFERRAL
+  SOCIAL_MEDIA
+  PHONE
+  WALK_IN
+  EMAIL
+  ADVERTISEMENT
+  OTHER
+}
+
+model Lead {
+  id            String        @id @default(cuid())
+  name          String
+  email         String?
+  phone         String
+  secondaryPhone String?
+  address       String?
+  city          String?
+  state         String?
+  pincode       String?
+  location      Json?         // { lat, lng }
+
+  status        LeadStatus    @default(NEW)
+  source        LeadSource    @default(OTHER)
+  priority      Int           @default(2) // 1=High, 2=Medium, 3=Low
+  budget        Float?
+  projectType   String?
+  requirements  String?
+  notes         String?
+  metadata      Json?
+
+  ownerId       String
+  owner         User          @relation("LeadOwner", fields: [ownerId], references: [id])
+
+  // Relationships
+  assignments   LeadAssignment[]
+  quotations    Quotation[]
+  appointments  Appointment[]
+  activities    LeadActivity[]
+
+  convertedToProjectId String?   @unique
+  convertedToProject   Project?  @relation("LeadConversion")
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([source])
+  @@index([createdAt])
+}
+
+model LeadAssignment {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  assignedAt DateTime @default(now())
+
+  @@unique([leadId, userId])
+  @@index([leadId])
+  @@index([userId])
+}
+
+model LeadActivity {
+  id          String   @id @default(cuid())
+  leadId      String
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type        String   // CALL, EMAIL, MEETING, NOTE, STATUS_CHANGE
+  description String
+  metadata    Json?
+
+  createdAt   DateTime @default(now())
+
+  @@index([leadId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// MODULE 3: QUOTATION BUILDER
+// ============================================================================
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  VIEWED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+model Quotation {
+  id              String          @id @default(cuid())
+  quotationNumber String          @unique
+  version         Int             @default(1)
+
+  leadId          String
+  lead            Lead            @relation(fields: [leadId], references: [id])
+
+  title           String
+  description     String?
+  notes           String?
+  termsConditions String?
+
+  status          QuotationStatus @default(DRAFT)
+  validUntil      DateTime?
+
+  subtotal        Float           @default(0)
+  taxRate         Float           @default(0)
+  taxAmount       Float           @default(0)
+  discount        Float           @default(0)
+  total           Float           @default(0)
+
+  items           QuotationItem[]
+
+  createdById     String
+  createdBy       User            @relation(fields: [createdById], references: [id])
+
+  pdfUrl          String?
+  sentAt          DateTime?
+  viewedAt        DateTime?
+  acceptedAt      DateTime?
+  rejectedAt      DateTime?
+
+  signature       String?         // Base64 signature
+  signedAt        DateTime?
+
+  convertedToProjectId String?    @unique
+  convertedToProject   Project?   @relation("QuotationConversion")
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([leadId])
+  @@index([status])
+  @@index([quotationNumber])
+}
+
+model QuotationItem {
+  id            String     @id @default(cuid())
+  quotationId   String
+  quotation     Quotation  @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  name          String
+  description   String?
+  category      String?
+  quantity      Float      @default(1)
+  unit          String     @default("unit")
+  unitPrice     Float
+  total         Float
+
+  taxRate       Float      @default(0)
+  discount      Float      @default(0)
+
+  metadata      Json?
+
+  order         Int        @default(0)
+
+  templateId    String?
+  template      QuotationTemplate? @relation(fields: [templateId], references: [id])
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([quotationId])
+  @@index([templateId])
+}
+
+model QuotationTemplate {
+  id          String          @id @default(cuid())
+  name        String
+  category    String
+  description String?
+  unitPrice   Float
+  unit        String          @default("unit")
+  taxRate     Float           @default(0)
+  metadata    Json?
+
+  items       QuotationItem[]
+
+  isActive    Boolean         @default(true)
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([category])
+  @@index([isActive])
+}
+
+// ============================================================================
+// MODULE 4: PROJECT MANAGEMENT
+// ============================================================================
+
+enum ProjectStatus {
+  PLANNING
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+model Project {
+  id              String          @id @default(cuid())
+  projectNumber   String          @unique
+  name            String
+  description     String?
+
+  status          ProjectStatus   @default(PLANNING)
+  priority        Int             @default(2)
+
+  clientName      String
+  clientEmail     String?
+  clientPhone     String
+  siteAddress     String
+  location        Json?
+
+  startDate       DateTime?
+  endDate         DateTime?
+  actualStartDate DateTime?
+  actualEndDate   DateTime?
+
+  budget          Float?
+  actualCost      Float?
+  progressPercent Int             @default(0)
+
+  managerId       String
+  manager         User            @relation("ProjectManager", fields: [managerId], references: [id])
+
+  // Relationships
+  phases          ProjectPhase[]
+  milestones      ProjectMilestone[]
+  tasks           ProjectTask[]
+  photos          ProjectPhoto[]
+  notes           ProjectNote[]
+  measurements    Measurement[]
+  invoices        Invoice[]
+  agreements      Agreement[]
+  serviceTickets  ServiceTicket[]
+  clientPortalAccess ClientPortalAccess[]
+
+  fromLeadId      String?         @unique
+  fromLead        Lead?           @relation("LeadConversion", fields: [fromLeadId], references: [id])
+
+  fromQuotationId String?         @unique
+  fromQuotation   Quotation?      @relation("QuotationConversion", fields: [fromQuotationId], references: [id])
+
+  metadata        Json?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([managerId])
+  @@index([status])
+  @@index([projectNumber])
+}
+
+model ProjectPhase {
+  id          String        @id @default(cuid())
+  projectId   String
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  order       Int
+
+  startDate   DateTime?
+  endDate     DateTime?
+  status      String        @default("PENDING")
+
+  progress    Int           @default(0)
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([projectId])
+  @@index([order])
+}
+
+model ProjectMilestone {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  dueDate     DateTime
+
+  completed   Boolean   @default(false)
+  completedAt DateTime?
+
+  order       Int       @default(0)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([dueDate])
+}
+
+model ProjectTask {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  assignedTo  String?
+
+  status      String    @default("TODO") // TODO, IN_PROGRESS, DONE
+  priority    Int       @default(2)
+
+  dueDate     DateTime?
+  completedAt DateTime?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+}
+
+model ProjectPhoto {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  url         String
+  thumbnail   String?
+  caption     String?
+  takenAt     DateTime  @default(now())
+  location    Json?
+  metadata    Json?
+
+  createdAt   DateTime  @default(now())
+
+  @@index([projectId])
+  @@index([takenAt])
+}
+
+model ProjectNote {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  content     String
+  authorId    String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([projectId])
+}
+
+// ============================================================================
+// MODULE 5: INVENTORY & STOCK MANAGEMENT
+// ============================================================================
+
+model InventoryItem {
+  id              String              @id @default(cuid())
+  sku             String              @unique
+  name            String
+  description     String?
+  category        String
+
+  unit            String              @default("unit")
+  currentStock    Float               @default(0)
+  reorderLevel    Float               @default(10)
+
+  unitCost        Float               @default(0)
+  sellingPrice    Float               @default(0)
+
+  supplier        String?
+  location        String?
+
+  metadata        Json?
+  images          String[]
+
+  // Relationships
+  movements       StockMovement[]
+  poItems         PurchaseOrderItem[]
+
+  isActive        Boolean             @default(true)
+
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([sku])
+  @@index([category])
+  @@index([isActive])
+}
+
+enum MovementType {
+  IN
+  OUT
+  ADJUSTMENT
+  RETURN
+}
+
+model StockMovement {
+  id          String        @id @default(cuid())
+  itemId      String
+  item        InventoryItem @relation(fields: [itemId], references: [id])
+
+  type        MovementType
+  quantity    Float
+
+  reference   String?       // PO number, project number, etc.
+  notes       String?
+
+  balanceBefore Float
+  balanceAfter  Float
+
+  createdAt   DateTime      @default(now())
+
+  @@index([itemId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// MODULE 6: SITE MEASUREMENT & ANNOTATION
+// ============================================================================
+
+model Measurement {
+  id          String              @id @default(cuid())
+  projectId   String?
+  project     Project?            @relation(fields: [projectId], references: [id])
+
+  title       String
+  description String?
+  location    String?
+
+  photos      MeasurementPhoto[]
+  annotations MeasurementAnnotation[]
+
+  pdfUrl      String?
+
+  metadata    Json?
+
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([projectId])
+}
+
+model MeasurementPhoto {
+  id            String       @id @default(cuid())
+  measurementId String
+  measurement   Measurement  @relation(fields: [measurementId], references: [id], onDelete: Cascade)
+
+  url           String
+  thumbnail     String?
+  caption       String?
+  order         Int          @default(0)
+
+  annotations   MeasurementAnnotation[]
+
+  createdAt     DateTime     @default(now())
+
+  @@index([measurementId])
+}
+
+model MeasurementAnnotation {
+  id          String            @id @default(cuid())
+  measurementId String
+  measurement Measurement       @relation(fields: [measurementId], references: [id], onDelete: Cascade)
+
+  photoId     String?
+  photo       MeasurementPhoto? @relation(fields: [photoId], references: [id], onDelete: Cascade)
+
+  type        String            // LINE, RECTANGLE, CIRCLE, TEXT, ARROW
+  data        Json              // Konva shape data
+  label       String?
+  dimension   String?
+
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([measurementId])
+  @@index([photoId])
+}
+
+// ============================================================================
+// MODULE 7: DIGITAL MATERIALS CATALOG
+// ============================================================================
+
+model MaterialCategory {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  slug        String     @unique
+  description String?
+  icon        String?
+  order       Int        @default(0)
+
+  materials   Material[]
+
+  parentId    String?
+  parent      MaterialCategory? @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    MaterialCategory[] @relation("CategoryHierarchy")
+
+  isActive    Boolean    @default(true)
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([slug])
+  @@index([isActive])
+}
+
+model Material {
+  id          String            @id @default(cuid())
+  name        String
+  sku         String            @unique
+  description String?
+
+  categoryId  String
+  category    MaterialCategory  @relation(fields: [categoryId], references: [id])
+
+  brand       String?
+  supplier    String?
+
+  images      String[]
+  thumbnail   String?
+
+  colors      Json?             // Array of color codes
+  finishes    String[]
+  sizes       Json?
+
+  unitPrice   Float
+  unit        String            @default("sqft")
+
+  specifications Json?
+  tags        String[]
+
+  sampleSheetUrl String?
+
+  priceHistory MaterialPriceHistory[]
+
+  inStock     Boolean           @default(true)
+  isFeatured  Boolean           @default(false)
+
+  metadata    Json?
+
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([categoryId])
+  @@index([sku])
+  @@index([isFeatured])
+}
+
+// ============================================================================
+// MODULE 8: AGREEMENTS & INVOICES
+// ============================================================================
+
+enum AgreementStatus {
+  DRAFT
+  SENT
+  SIGNED
+  CANCELLED
+}
+
+model Agreement {
+  id            String          @id @default(cuid())
+  agreementNumber String        @unique
+
+  projectId     String
+  project       Project         @relation(fields: [projectId], references: [id])
+
+  title         String
+  content       String
+  termsConditions String?
+
+  status        AgreementStatus @default(DRAFT)
+
+  amount        Float
+
+  clientName    String
+  clientEmail   String?
+  clientPhone   String
+
+  signature     String?
+  signedAt      DateTime?
+
+  pdfUrl        String?
+
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([projectId])
+  @@index([agreementNumber])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  PARTIALLY_PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Invoice {
+  id            String         @id @default(cuid())
+  invoiceNumber String         @unique
+
+  projectId     String
+  project       Project        @relation(fields: [projectId], references: [id])
+
+  title         String
+  description   String?
+
+  status        InvoiceStatus  @default(DRAFT)
+
+  subtotal      Float
+  taxRate       Float          @default(0)
+  taxAmount     Float
+  discount      Float          @default(0)
+  total         Float
+
+  paidAmount    Float          @default(0)
+  dueAmount     Float
+
+  items         InvoiceItem[]
+  payments      Payment[]
+
+  dueDate       DateTime?
+
+  clientName    String
+  clientEmail   String?
+  clientPhone   String
+  clientAddress String?
+
+  notes         String?
+
+  pdfUrl        String?
+
+  createdById   String
+  createdBy     User           @relation(fields: [createdById], references: [id])
+
+  sentAt        DateTime?
+  paidAt        DateTime?
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([projectId])
+  @@index([status])
+  @@index([invoiceNumber])
+}
+
+model InvoiceItem {
+  id          String    @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  description String
+  quantity    Float     @default(1)
+  unit        String    @default("unit")
+  unitPrice   Float
+  total       Float
+
+  taxRate     Float     @default(0)
+
+  order       Int       @default(0)
+
+  createdAt   DateTime  @default(now())
+
+  @@index([invoiceId])
+}
+
+// ============================================================================
+// MODULE 9: EMPLOYEE/CARPENTER MANAGEMENT
+// ============================================================================
+
+enum EmployeeType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  CARPENTER
+  TECHNICIAN
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+model Employee {
+  id              String          @id @default(cuid())
+  employeeNumber  String          @unique
+
+  userId          String?         @unique
+  user            User?           @relation(fields: [userId], references: [id])
+
+  name            String
+  email           String?
+  phone           String
+
+  type            EmployeeType
+  status          EmployeeStatus  @default(ACTIVE)
+
+  designation     String
+  department      String?
+
+  dateOfJoining   DateTime
+  dateOfLeaving   DateTime?
+
+  salary          Float?
+
+  address         String?
+  emergencyContact String?
+
+  skills          String[]
+  certifications  String[]
+
+  photo           String?
+
+  attendance      Attendance[]
+  taskAssignments TaskAssignment[]
+
+  metadata        Json?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([employeeNumber])
+  @@index([status])
+}
+
+model Attendance {
+  id          String    @id @default(cuid())
+  employeeId  String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  date        DateTime
+
+  clockIn     DateTime?
+  clockOut    DateTime?
+
+  hoursWorked Float?
+
+  status      String    @default("PRESENT") // PRESENT, ABSENT, HALF_DAY, LEAVE
+  notes       String?
+
+  location    Json?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([employeeId, date])
+  @@index([employeeId])
+  @@index([date])
+}
+
+model TaskAssignment {
+  id          String    @id @default(cuid())
+  employeeId  String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+
+  dueDate     DateTime?
+  completedAt DateTime?
+
+  status      String    @default("ASSIGNED") // ASSIGNED, IN_PROGRESS, COMPLETED
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([employeeId])
+  @@index([status])
+}
+
+// ============================================================================
+// MODULE 10: APPOINTMENT BOOKING & CALENDAR
+// ============================================================================
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  RESCHEDULED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+model Appointment {
+  id            String            @id @default(cuid())
+
+  leadId        String?
+  lead          Lead?             @relation(fields: [leadId], references: [id])
+
+  title         String
+  description   String?
+
+  clientName    String
+  clientEmail   String?
+  clientPhone   String
+
+  startTime     DateTime
+  endTime       DateTime
+
+  status        AppointmentStatus @default(SCHEDULED)
+
+  assignedToId  String
+  assignedTo    User              @relation(fields: [assignedToId], references: [id])
+
+  location      String?
+  locationCoords Json?
+
+  notes         String?
+
+  reminders     AppointmentReminder[]
+
+  googleEventId String?
+
+  metadata      Json?
+
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([assignedToId])
+  @@index([startTime])
+  @@index([status])
+}
+
+model AppointmentReminder {
+  id            String      @id @default(cuid())
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  type          String      // EMAIL, SMS, WHATSAPP
+  sentAt        DateTime?
+
+  scheduledFor  DateTime
+
+  createdAt     DateTime    @default(now())
+
+  @@index([appointmentId])
+}
+
+// ============================================================================
+// MODULE 11: ROUTE OPTIMIZER
+// ============================================================================
+
+enum RouteStatus {
+  DRAFT
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+}
+
+model Route {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+
+  date        DateTime
+
+  assignedToId String
+  assignedTo  User        @relation(fields: [assignedToId], references: [id])
+
+  status      RouteStatus @default(DRAFT)
+
+  waypoints   Waypoint[]
+
+  totalDistance Float?
+  totalDuration Float?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  metadata    Json?
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([assignedToId])
+  @@index([date])
+  @@index([status])
+}
+
+model Waypoint {
+  id          String   @id @default(cuid())
+  routeId     String
+  route       Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+
+  order       Int
+
+  name        String
+  address     String
+  location    Json     // { lat, lng }
+
+  type        String   // LEAD_VISIT, SITE_VISIT, PICKUP, DELIVERY
+  referenceId String?
+
+  notes       String?
+
+  arrivedAt   DateTime?
+  departedAt  DateTime?
+
+  completed   Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+
+  @@index([routeId])
+  @@index([order])
+}
+
+// ============================================================================
+// MODULE 12: WARRANTY & SERVICE TICKETS
+// ============================================================================
+
+enum TicketStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  CANCELLED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model ServiceTicket {
+  id            String          @id @default(cuid())
+  ticketNumber  String          @unique
+
+  projectId     String?
+  project       Project?        @relation(fields: [projectId], references: [id])
+
+  title         String
+  description   String
+  category      String
+
+  status        TicketStatus    @default(OPEN)
+  priority      TicketPriority  @default(MEDIUM)
+
+  clientName    String
+  clientEmail   String?
+  clientPhone   String
+
+  assignedToId  String?
+  assignedTo    User?           @relation(fields: [assignedToId], references: [id])
+
+  address       String?
+  location      Json?
+
+  scheduledDate DateTime?
+  completedDate DateTime?
+
+  notes         String?
+  resolution    String?
+
+  partsUsed     String[]
+  laborHours    Float?
+
+  photos        String[]
+
+  warrantyId    String?
+  warranty      Warranty?       @relation(fields: [warrantyId], references: [id])
+
+  metadata      Json?
+
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([ticketNumber])
+  @@index([status])
+  @@index([priority])
+  @@index([projectId])
+}
+
+model Warranty {
+  id              String          @id @default(cuid())
+  warrantyNumber  String          @unique
+
+  productName     String
+  serialNumber    String?
+
+  startDate       DateTime
+  endDate         DateTime
+
+  terms           String?
+
+  clientName      String
+  clientEmail     String?
+  clientPhone     String
+
+  serviceTickets  ServiceTicket[]
+
+  metadata        Json?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([warrantyNumber])
+  @@index([endDate])
+}
+
+// ============================================================================
+// MODULE 13: PAYMENTS & EMI PLANNER
+// ============================================================================
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  UPI
+  BANK_TRANSFER
+  CHEQUE
+  STRIPE
+  RAZORPAY
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  paymentNumber   String        @unique
+
+  invoiceId       String?
+  invoice         Invoice?      @relation(fields: [invoiceId], references: [id])
+
+  amount          Float
+  currency        String        @default("INR")
+
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+
+  transactionId   String?
+  reference       String?
+
+  paidBy          String
+  paidAt          DateTime?
+
+  receiptUrl      String?
+
+  notes           String?
+
+  emiScheduleId   String?
+  emiSchedule     EMISchedule?  @relation(fields: [emiScheduleId], references: [id])
+
+  metadata        Json?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([invoiceId])
+  @@index([status])
+  @@index([paymentNumber])
+}
+
+enum EMIType {
+  FLAT_RATE
+  REDUCING_BALANCE
+}
+
+model EMISchedule {
+  id              String    @id @default(cuid())
+
+  principalAmount Float
+  interestRate    Float
+  tenure          Int       // months
+  emiType         EMIType   @default(FLAT_RATE)
+
+  monthlyEMI      Float
+  totalInterest   Float
+  totalAmount     Float
+
+  clientName      String
+  clientEmail     String?
+  clientPhone     String
+
+  installments    EMIInstallment[]
+  payments        Payment[]
+
+  startDate       DateTime
+
+  metadata        Json?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([clientPhone])
+}
+
+model EMIInstallment {
+  id            String       @id @default(cuid())
+  scheduleId    String
+  schedule      EMISchedule  @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  installmentNumber Int
+
+  dueDate       DateTime
+  amount        Float
+  principal     Float
+  interest      Float
+
+  status        String       @default("PENDING") // PENDING, PAID, OVERDUE
+  paidAt        DateTime?
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([scheduleId, installmentNumber])
+  @@index([scheduleId])
+  @@index([dueDate])
+  @@index([status])
+}
+
+// ============================================================================
+// MODULE 14: VENDOR MANAGEMENT & PURCHASE ORDERS
+// ============================================================================
+
+enum VendorStatus {
+  ACTIVE
+  INACTIVE
+  BLACKLISTED
+}
+
+model Vendor {
+  id              String          @id @default(cuid())
+  vendorCode      String          @unique
+  name            String
+
+  contactPerson   String?
+  email           String?
+  phone           String
+
+  address         String?
+  city            String?
+  state           String?
+  pincode         String?
+
+  gstin           String?
+  pan             String?
+
+  status          VendorStatus    @default(ACTIVE)
+
+  category        String?
+
+  paymentTerms    String?
+  creditLimit     Float?
+
+  rating          Float?
+
+  priceListItems  VendorPriceList[]
+  purchaseOrders  PurchaseOrder[]
+
+  metadata        Json?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([vendorCode])
+  @@index([status])
+}
+
+model VendorPriceList {
+  id          String    @id @default(cuid())
+  vendorId    String
+  vendor      Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  itemName    String
+  sku         String?
+  unitPrice   Float
+  unit        String    @default("unit")
+
+  validFrom   DateTime  @default(now())
+  validUntil  DateTime?
+
+  metadata    Json?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([vendorId])
+}
+
+enum POStatus {
+  DRAFT
+  SENT
+  CONFIRMED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id              String            @id @default(cuid())
+  poNumber        String            @unique
+
+  vendorId        String
+  vendor          Vendor            @relation(fields: [vendorId], references: [id])
+
+  orderDate       DateTime          @default(now())
+  deliveryDate    DateTime?
+
+  status          POStatus          @default(DRAFT)
+
+  items           PurchaseOrderItem[]
+
+  subtotal        Float
+  taxAmount       Float
+  total           Float
+
+  notes           String?
+  termsConditions String?
+
+  receivedDate    DateTime?
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([vendorId])
+  @@index([poNumber])
+  @@index([status])
+}
+
+model PurchaseOrderItem {
+  id          String         @id @default(cuid())
+  poId        String
+  po          PurchaseOrder  @relation(fields: [poId], references: [id], onDelete: Cascade)
+
+  itemId      String?
+  item        InventoryItem? @relation(fields: [itemId], references: [id])
+
+  description String
+  quantity    Float
+  unit        String         @default("unit")
+  unitPrice   Float
+  total       Float
+
+  received    Float          @default(0)
+
+  order       Int            @default(0)
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([poId])
+}
+
+// ============================================================================
+// MODULE 15: AI SOCIAL CONTENT GENERATOR
+// ============================================================================
+
+enum ContentType {
+  CAPTION
+  HASHTAGS
+  REEL_SCRIPT
+  POST_IDEA
+  IMAGE_PROMPT
+  GENERATED_IMAGE
+}
+
+enum ContentStatus {
+  DRAFT
+  APPROVED
+  PUBLISHED
+  ARCHIVED
+}
+
+model GeneratedContent {
+  id          String         @id @default(cuid())
+
+  type        ContentType
+  status      ContentStatus  @default(DRAFT)
+
+  prompt      String?
+  content     String
+
+  platform    String?        // INSTAGRAM, FACEBOOK, LINKEDIN
+
+  mediaUrl    String?
+  thumbnail   String?
+
+  tags        String[]
+
+  metadata    Json?
+
+  publishedAt DateTime?
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([type])
+  @@index([status])
+}
+
+// ============================================================================
+// MODULE 16: CLIENT ONBOARDING PORTAL
+// ============================================================================
+
+model ClientPortalAccess {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id])
+
+  token       String    @unique
+
+  clientName  String
+  clientEmail String
+  clientPhone String
+
+  accessLevel String    @default("READ") // READ, COMMENT, UPLOAD
+
+  expiresAt   DateTime?
+
+  lastAccessAt DateTime?
+
+  documents   ClientDocument[]
+  approvals   ClientApproval[]
+
+  isActive    Boolean   @default(true)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([token])
+}
+
+model ClientDocument {
+  id          String              @id @default(cuid())
+  portalId    String
+  portal      ClientPortalAccess  @relation(fields: [portalId], references: [id], onDelete: Cascade)
+
+  name        String
+  type        String
+  url         String
+  size        Int?
+
+  uploadedAt  DateTime            @default(now())
+
+  @@index([portalId])
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REVISION_REQUESTED
+}
+
+model ClientApproval {
+  id          String              @id @default(cuid())
+  portalId    String
+  portal      ClientPortalAccess  @relation(fields: [portalId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+
+  status      ApprovalStatus      @default(PENDING)
+
+  attachments String[]
+
+  feedback    String?
+  respondedAt DateTime?
+
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([portalId])
+  @@index([status])
+}
+
+// ============================================================================
+// MODULE 17: HOME COST ESTIMATOR
+// ============================================================================
+
+model CostEstimate {
+  id              String   @id @default(cuid())
+
+  name            String?
+  email           String?
+  phone           String?
+
+  projectType     String   // KITCHEN, WARDROBE, FULL_HOME
+  area            Float
+  unit            String   @default("sqft")
+
+  city            String?
+
+  estimatedCost   Float
+  breakdown       Json     // Detailed cost breakdown
+
+  metadata        Json?
+
+  convertedToLead Boolean  @default(false)
+
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([convertedToLead])
+}
+
+// ============================================================================
+// MODULE 18: BEFORE/AFTER SLIDER & SLIDESHOW
+// ============================================================================
+
+model BeforeAfter {
+  id          String   @id @default(cuid())
+
+  title       String
+  description String?
+
+  beforeImage String
+  afterImage  String
+
+  projectType String?
+  location    String?
+
+  tags        String[]
+
+  order       Int      @default(0)
+
+  isPublished Boolean  @default(false)
+  publishedAt DateTime?
+
+  videoUrl    String?  // Generated slideshow
+
+  metadata    Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isPublished])
+  @@index([order])
+}
+
+// ============================================================================
+// MODULE 19: FLOORPLAN → ESTIMATE TOOL
+// ============================================================================
+
+enum FloorplanStatus {
+  UPLOADED
+  PROCESSING
+  ANALYZED
+  FAILED
+}
+
+model FloorplanUpload {
+  id              String          @id @default(cuid())
+
+  originalImage   String
+  processedImage  String?
+
+  status          FloorplanStatus @default(UPLOADED)
+
+  uploadedBy      String?
+
+  analysis        Json?           // ML analysis results
+
+  extractedDimensions Json?
+  estimatedArea   Float?
+
+  generatedEstimate Json?
+
+  error           String?
+
+  metadata        Json?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([status])
+}
+
+// ============================================================================
+// MODULE 20: MATERIAL PRICE TRACKER
+// ============================================================================
+
+model MaterialPriceHistory {
+  id          String    @id @default(cuid())
+  materialId  String
+  material    Material  @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  price       Float
+  supplier    String?
+
+  effectiveDate DateTime @default(now())
+
+  notes       String?
+
+  createdAt   DateTime  @default(now())
+
+  @@index([materialId])
+  @@index([effectiveDate])
+}
+
+model PriceAlert {
+  id          String   @id @default(cuid())
+
+  materialName String
+  threshold   Float
+  type        String   // ABOVE, BELOW
+
+  email       String
+  phone       String?
+
+  isActive    Boolean  @default(true)
+
+  lastTriggered DateTime?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// ============================================================================
+// MODULE 21: VIRTUAL SHOWROOM & 3D VIEWER
+// ============================================================================
+
+model ThreeDModel {
+  id          String   @id @default(cuid())
+
+  name        String
+  description String?
+
+  modelUrl    String   // GLB/GLTF file
+  thumbnail   String?
+
+  category    String
+  tags        String[]
+
+  materials   Json?    // Material variants
+
+  scale       Float    @default(1)
+
+  isPublished Boolean  @default(false)
+  isFeatured  Boolean  @default(false)
+
+  views       Int      @default(0)
+
+  metadata    Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([isPublished])
+}
+
+model ProjectRender {
+  id          String   @id @default(cuid())
+
+  title       String
+  description String?
+
+  imageUrl    String
+  thumbnail   String?
+
+  projectType String?
+  style       String?
+
+  tags        String[]
+
+  order       Int      @default(0)
+
+  isPublished Boolean  @default(false)
+  isFeatured  Boolean  @default(false)
+
+  views       Int      @default(0)
+
+  metadata    Json?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isPublished])
+  @@index([order])
+}
+
+// ============================================================================
+// MODULE 22: AR MEASUREMENT POC
+// ============================================================================
+
+model ARSession {
+  id          String   @id @default(cuid())
+
+  sessionId   String   @unique
+
+  userId      String?
+  deviceInfo  Json?
+
+  measurements Json?   // Captured AR measurements
+
+  screenshots String[]
+
+  metadata    Json?
+
+  createdAt   DateTime @default(now())
+
+  @@index([sessionId])
+}
+
+// ============================================================================
+// MODULE 23: MARKETING & ANALYTICS DASHBOARD
+// ============================================================================
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+model MarketingCampaign {
+  id          String          @id @default(cuid())
+  name        String
+  description String?
+
+  type        String          // SOCIAL, EMAIL, SMS, PAID_ADS
+  platform    String?         // FACEBOOK, INSTAGRAM, GOOGLE
+
+  status      CampaignStatus  @default(DRAFT)
+
+  budget      Float?
+  spent       Float           @default(0)
+
+  startDate   DateTime
+  endDate     DateTime?
+
+  targetAudience Json?
+
+  conversions CampaignConversion[]
+
+  createdById String
+  createdBy   User            @relation(fields: [createdById], references: [id])
+
+  metadata    Json?
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([status])
+  @@index([startDate])
+}
+
+model CampaignConversion {
+  id          String             @id @default(cuid())
+  campaignId  String
+  campaign    MarketingCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  type        String             // LEAD, QUOTATION, PROJECT
+  referenceId String?
+
+  value       Float?
+
+  metadata    Json?
+
+  convertedAt DateTime           @default(now())
+
+  @@index([campaignId])
+}
+
+// ============================================================================
+// MODULE 24: UNIFIED NOTIFICATIONS & ACTIVITY LOG
+// ============================================================================
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  REMINDER
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  WHATSAPP
+  PUSH
+}
+
+model Notification {
+  id          String             @id @default(cuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type        NotificationType   @default(INFO)
+  channel     NotificationChannel @default(IN_APP)
+
+  title       String
+  message     String
+
+  actionUrl   String?
+
+  isRead      Boolean            @default(false)
+  readAt      DateTime?
+
+  metadata    Json?
+
+  createdAt   DateTime           @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+
+  action      String
+  entity      String
+  entityId    String?
+
+  description String
+
+  ipAddress   String?
+  userAgent   String?
+
+  metadata    Json?
+
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// MODULE 1: DASHBOARD WIDGETS
+// ============================================================================
+
+model DashboardWidget {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type        String   // TODAY_VISITS, OPEN_LEADS, OUTSTANDING_PAYMENTS, etc.
+  title       String
+
+  position    Int      @default(0)
+  size        String   @default("MEDIUM") // SMALL, MEDIUM, LARGE
+
+  config      Json?
+
+  isVisible   Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, type])
+  @@index([userId])
+}
+
+// ============================================================================
+// MODULE 26: PWA & OFFLINE - SYNC QUEUE
+// ============================================================================
+
+enum SyncStatus {
+  PENDING
+  SYNCING
+  SYNCED
+  FAILED
+}
+
+model OfflineSyncQueue {
+  id          String     @id @default(cuid())
+
+  userId      String?
+
+  action      String     // CREATE_LEAD, UPDATE_MEASUREMENT, etc.
+  entity      String
+
+  data        Json
+
+  status      SyncStatus @default(PENDING)
+
+  attempts    Int        @default(0)
+  lastError   String?
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  syncedAt    DateTime?
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// MODULE 27: INTEGRATIONS
+// ============================================================================
+
+enum IntegrationType {
+  STRIPE
+  RAZORPAY
+  MAPBOX
+  GOOGLE_MAPS
+  TWILIO
+  WHATSAPP
+  GOOGLE_CALENDAR
+  OPENAI
+  ANTHROPIC
+  SUPABASE
+  SMTP
+}
+
+model Integration {
+  id          String          @id @default(cuid())
+
+  type        IntegrationType @unique
+  name        String
+
+  isEnabled   Boolean         @default(false)
+
+  config      Json?           // Encrypted config
+
+  lastSyncAt  DateTime?
+
+  metadata    Json?
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([type])
+}
+
+model WebhookLog {
+  id          String   @id @default(cuid())
+
+  source      String
+  event       String
+
+  payload     Json
+
+  statusCode  Int?
+  response    Json?
+
+  processedAt DateTime?
+
+  createdAt   DateTime @default(now())
+
+  @@index([source])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// SETTINGS & CONFIGURATION
+// ============================================================================
+
+model AppSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Json
+  description String?
+
+  updatedAt   DateTime @updatedAt
+
+  @@index([key])
+}
